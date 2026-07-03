@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
   issues: write
 
 jobs:
@@ -25,10 +25,27 @@ jobs:
         run: python -m pip install -e .
 
       - name: Run review-pilot
-        run: review-pilot github-action --event-path "$GITHUB_EVENT_PATH" --output-dir review-pilot-artifacts --post-summary-comment
+        env:
+          REVIEW_PILOT_LLM_PROVIDER: openai-compatible
+          REVIEW_PILOT_LLM_MODEL: deepseek-v4-pro
+          REVIEW_PILOT_LLM_BASE_URL: https://api.deepseek.com
+          REVIEW_PILOT_API_KEY: ${{ secrets.REVIEW_PILOT_API_KEY }}
+          REVIEW_PILOT_LLM_TIMEOUT_SECONDS: "120"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: review-pilot github-action --event-path "$GITHUB_EVENT_PATH" --output-dir review-pilot-artifacts --provider openai-compatible --post-summary-comment
 
       - name: Upload review artifact
         uses: actions/upload-artifact@v4
         with:
           name: review-pilot-report
           path: review-pilot-artifacts/
+
+      - name: Notify Feishu
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          if [ -n "$FEISHU_WEBHOOK_URL" ]; then
+            review-pilot notify feishu --report review-pilot-artifacts/review-report.json
+          else
+            echo "FEISHU_WEBHOOK_URL is not configured; skip Feishu notification."
+          fi
