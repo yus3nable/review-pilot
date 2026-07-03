@@ -390,6 +390,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Return exit code 1 when the artifact report reaches this severity.",
     )
     github_action_parser.add_argument(
+        "--provider",
+        choices=supported_providers(),
+        help="Run the formal LLM provider against the pull request workspace.",
+    )
+    github_action_parser.add_argument(
         "--post-summary-comment",
         action="store_true",
         help="Publish or preview the PR summary comment.",
@@ -551,6 +556,11 @@ def build_github_action_parser() -> argparse.ArgumentParser:
         "--fail-on",
         choices=("P0", "P1", "P2", "P3"),
         help="Return exit code 1 when the artifact report reaches this severity.",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=supported_providers(),
+        help="Run the formal LLM provider against the pull request workspace.",
     )
     parser.add_argument(
         "--post-summary-comment",
@@ -922,6 +932,7 @@ def _run_github_action(args: argparse.Namespace, stdout: TextIO, stderr: TextIO)
             dry_run=args.dry_run,
             fail_on=args.fail_on,
             provider=GitHubProvider(),
+            llm_provider=args.provider,
             post_summary_comment=args.post_summary_comment,
             report_url=args.report_url,
         )

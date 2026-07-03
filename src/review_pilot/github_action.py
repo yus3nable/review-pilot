@@ -6,8 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .code_index import build_code_index
 from .config import ReviewPilotConfig
+from .context_pack import build_review_context_pack, validate_context_pack_dict
+from .context_selector import select_context_candidates
+from .finding_merger import merge_findings
 from .git_providers import GitHubProvider, GitProviderError
+from .llm import LLMOutputError, LLMProviderError, StructuredReviewer, create_provider
 from .models import RepoInfo
 from .pr_commenter import CommentAction, build_summary_comment, comment_target_from_report
 from .pr_commenter import GitHubCommentClient, CommentError
@@ -16,6 +21,7 @@ from .report_models import ReviewReport
 from .report_summary import should_fail_findings
 from .report_writer import write_report
 from .rule_engine import default_rule_engine
+from .token_budget import apply_token_budget
 from .workspace import WorkspaceError, WorkspacePlan, build_workspace_plan, prepare_workspace
 
 
@@ -134,6 +140,7 @@ def run_github_action(
     dry_run: bool = True,
     fail_on: str | None = None,
     provider: GitHubProvider | None = None,
+    llm_provider: str | None = None,
     post_summary_comment: bool = False,
     report_url: str | None = None,
     comment_client: GitHubCommentClient | None = None,
@@ -157,6 +164,7 @@ def run_github_action(
         pr_info=pr_info,
         workspace=workspace,
         dry_run=dry_run,
+        llm_provider=llm_provider,
     )
     artifact_dir = Path(output_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -209,7 +217,11 @@ def build_artifact_report(
     pr_info: PullRequestInfo,
     workspace: WorkspacePlan,
     dry_run: bool,
+    llm_provider: str | None = None,
 ) -> ReviewReport:
+    if dry_run and llm_provider is not None:
+        raise GitHubActionError("github-action --provider requires a real workspace; remove --dry-run")
+
     repo_info = RepoInfo(
         root=workspace.workspace_path,
         branch=context.head_ref,
@@ -218,23 +230,76 @@ def build_artifact_report(
         has_unstaged_changes=False,
     )
     config = ReviewPilotConfig.default()
-    findings = default_rule_engine(config).run(pr_info.parsed_diff, repo_info=repo_info)
+    parsed_diff = pr_info.parsed_diff
+    rule_findings = default_rule_engine(config).run(parsed_diff, repo_info=repo_info)
+    findings = rule_findings
+    ai_metadata: dict[str, Any] = {"ai_enabled": llm_provider is not None}
+    merge_summary = None
+    if llm_provider is not None:
+        try:
+            index = build_code_index(repo_info.root, config)
+            candidates = select_context_candidates(parsed_diff, index)
+            context_manifest = apply_token_budget(
+                candidates,
+                parsed_diff,
+                repo_info.root,
+                max_context_tokens=4000,
+            )
+            pack = build_review_context_pack(
+                repo_info=repo_info,
+                config=config,
+                parsed_diff=parsed_diff,
+                rule_findings=rule_findings,
+                context=context_manifest,
+            )
+            validate_context_pack_dict(pack.to_dict())
+            llm_result = StructuredReviewer(create_provider(llm_provider)).review(pack)
+        except (LLMProviderError, LLMOutputError, ValueError) as exc:
+            raise GitHubActionError(f"llm error: {exc}") from exc
+        merge_result = merge_findings(
+            rule_findings=rule_findings,
+            tool_findings=[],
+            llm_findings=list(llm_result.evidence.findings),
+        )
+        findings = list(merge_result.findings)
+        merge_summary = merge_result.summary.to_dict()
+        ai_metadata.update(
+            {
+                "provider": llm_result.response.provider,
+                "model": llm_result.response.model,
+                "context": {
+                    "used": len(context_manifest.context_used),
+                    "omitted": len(context_manifest.context_omitted),
+                    "used_tokens": context_manifest.used_tokens,
+                    "max_context_tokens": context_manifest.max_context_tokens,
+                },
+                "evidence_summary": llm_result.evidence.summary,
+                "dropped_llm_findings": [
+                    decision.to_dict()
+                    for decision in llm_result.evidence.dropped_findings
+                ],
+            }
+        )
+
+    metadata = {
+        "pipeline": "github-action-dry-run" if dry_run else "github-action",
+        "event_name": context.event_name,
+        "repository": context.repository,
+        "pull_request": context.pull_request_number,
+        "base_ref": context.base_ref,
+        "base_sha": context.base_sha,
+        "head_ref": context.head_ref,
+        "head_sha": context.head_sha,
+        "workspace_path": workspace.workspace_path,
+        "artifact_markdown": "review-report.md",
+        "artifact_json": "review-report.json",
+        **ai_metadata,
+    }
     return ReviewReport(
         findings=findings,
-        repo_info={
-            "pipeline": "github-action-dry-run" if dry_run else "github-action",
-            "event_name": context.event_name,
-            "repository": context.repository,
-            "pull_request": context.pull_request_number,
-            "base_ref": context.base_ref,
-            "base_sha": context.base_sha,
-            "head_ref": context.head_ref,
-            "head_sha": context.head_sha,
-            "workspace_path": workspace.workspace_path,
-            "artifact_markdown": "review-report.md",
-            "artifact_json": "review-report.json",
-        },
+        repo_info=metadata,
         config_source=config.source,
+        merge_summary=merge_summary,
     )
 
 

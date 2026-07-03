@@ -43,12 +43,9 @@ def build_review_prompt(context_pack: ReviewContextPack) -> ReviewPrompt:
         "Return exactly one plain JSON object that matches OUTPUT_CONTRACT. "
         "Do not use markdown fences, prose before or after JSON, or a Markdown report. "
         "Every finding source must be exactly 'llm'. "
-        "Write user-facing finding text in Simplified Chinese: message, "
-        "suggestion, and evidence.reason must be Chinese. Keep JSON field names, "
-        "enum values, file paths, code identifiers, and schema_version unchanged. "
-        "Only report issues that can be tied to a concrete added line in DIFF. "
-        "Every line_no must be a positive integer from an added line; if you "
-        "cannot identify such a line, do not emit that finding."
+        "Write every user-facing finding message, suggestion, and evidence.reason "
+        "in natural Simplified Chinese. Keep JSON keys, enum values, schema_version, "
+        "file paths, and code tokens unchanged."
     )
     return ReviewPrompt(system=system, user="\n\n".join(sections))
 
@@ -82,7 +79,6 @@ def llm_output_contract() -> dict[str, Any]:
             ],
             "source": "llm",
             "confidence": ["high", "medium", "low"],
-            "line_no": "positive integer from an added line in DIFF",
             "evidence_fields": ["reason"],
         },
     }

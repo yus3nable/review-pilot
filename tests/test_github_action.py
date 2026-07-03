@@ -14,6 +14,7 @@ from review_pilot.github_action import (
     run_github_action,
 )
 from review_pilot.pr_models import PullRequestFile, PullRequestInfo, PullRequestRef
+from review_pilot.workspace import WorkspacePlan
 
 
 EVENT = Path("tests/fixtures/github/pull_request_event.json")
@@ -80,6 +81,61 @@ def test_run_github_action_dry_run_writes_artifacts(tmp_path: Path) -> None:
     assert payload["summary"]["total_findings"] >= 1
 
 
+def test_run_github_action_rejects_provider_in_dry_run(tmp_path: Path) -> None:
+    with pytest.raises(GitHubActionError, match="requires a real workspace"):
+        run_github_action(
+            event_path=EVENT,
+            output_dir=tmp_path / "artifacts",
+            dry_run=True,
+            provider=FakeProvider(),
+            llm_provider="fake",
+        )
+
+
+def test_run_github_action_provider_merges_llm_findings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "review.py").write_text(
+        "def review():\n    result = build_report()\n    return result\n",
+        encoding="utf-8",
+    )
+
+    def fake_prepare(plan):
+        return plan
+
+    monkeypatch.setattr("review_pilot.github_action.prepare_workspace", fake_prepare)
+    monkeypatch.setattr(
+        "review_pilot.github_action.build_workspace_plan",
+        lambda pr_info, parent_dir=None, dry_run=True: WorkspacePlan(
+            workspace_path=str(workspace),
+            repo_clone_url=pr_info.head.repo_clone_url,
+            base_sha=pr_info.base.sha,
+            head_sha=pr_info.head.sha,
+            source=f"github:{pr_info.full_name}#{pr_info.number}",
+            dry_run=False,
+            commands=(),
+        ),
+    )
+
+    result = run_github_action(
+        event_path=EVENT,
+        output_dir=tmp_path / "artifacts",
+        dry_run=False,
+        provider=FakeProvider(),
+        llm_provider="fake",
+    )
+
+    payload = json.loads(result.json_path.read_text(encoding="utf-8"))
+    assert payload["repo_info"]["pipeline"] == "github-action"
+    assert payload["repo_info"]["provider"] == "fake"
+    assert payload["repo_info"]["model"] == "fake-review-model"
+    assert payload["merge_summary"]["source_counts"]["llm"] == 1
+    assert any(item["source"] == "llm" for item in payload["findings"])
+
+
 def test_run_github_action_translates_provider_error(tmp_path: Path) -> None:
     class FailingProvider:
         def fetch_pull_request(self, url: str) -> PullRequestInfo:
@@ -128,6 +184,7 @@ def test_github_action_cli_requires_dry_run() -> None:
     assert exit_code == 0
     assert "review-pilot github-action" in stdout
     assert "--dry-run" in stdout
+    assert "--provider" in stdout
     assert "required" not in stdout.lower()
     assert stderr == ""
 
