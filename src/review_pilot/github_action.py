@@ -22,7 +22,13 @@ from .report_summary import should_fail_findings
 from .report_writer import write_report
 from .rule_engine import default_rule_engine
 from .token_budget import apply_token_budget
-from .workspace import WorkspaceError, WorkspacePlan, build_workspace_plan, prepare_workspace
+from .workspace import (
+    WorkspaceError,
+    WorkspacePlan,
+    build_existing_workspace_plan,
+    build_workspace_plan,
+    prepare_workspace,
+)
 
 
 class GitHubActionError(RuntimeError):
@@ -151,9 +157,7 @@ def run_github_action(
         pr_info = _fixture_pull_request(event_path, context) or active_provider.fetch_pull_request(
             context.pull_request_url
         )
-        workspace = prepare_workspace(
-            build_workspace_plan(pr_info, parent_dir=Path(output_dir) / "workspaces", dry_run=dry_run)
-        )
+        workspace = prepare_workspace(_build_action_workspace_plan(pr_info, output_dir, dry_run))
     except GitProviderError as exc:
         raise GitHubActionError(f"github error: {exc}") from exc
     except WorkspaceError as exc:
@@ -209,6 +213,25 @@ def load_github_event(event_path: str | Path) -> dict[str, Any]:
     if not isinstance(event, dict):
         raise GitHubActionError("GitHub event file must contain a JSON object")
     return event
+
+
+def _build_action_workspace_plan(
+    pr_info: PullRequestInfo,
+    output_dir: str | Path,
+    dry_run: bool,
+) -> WorkspacePlan:
+    github_workspace = os.environ.get("GITHUB_WORKSPACE")
+    if github_workspace and not dry_run:
+        return build_existing_workspace_plan(
+            pr_info,
+            workspace_path=github_workspace,
+            dry_run=False,
+        )
+    return build_workspace_plan(
+        pr_info,
+        parent_dir=Path(output_dir) / "workspaces",
+        dry_run=dry_run,
+    )
 
 
 def build_artifact_report(

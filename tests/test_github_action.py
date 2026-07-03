@@ -92,6 +92,26 @@ def test_run_github_action_rejects_provider_in_dry_run(tmp_path: Path) -> None:
         )
 
 
+def test_run_github_action_reuses_github_workspace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "checked-out"
+    workspace.mkdir()
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(workspace))
+
+    result = run_github_action(
+        event_path=EVENT,
+        output_dir=tmp_path / "artifacts",
+        dry_run=False,
+        provider=FakeProvider(),
+    )
+
+    assert result.workspace.workspace_path == str(workspace.resolve())
+    assert result.workspace.source == "github-actions-checkout:octo-org/review-demo#42"
+    assert result.workspace.commands == ()
+
+
 def test_run_github_action_provider_merges_llm_findings(
     tmp_path: Path,
     monkeypatch,

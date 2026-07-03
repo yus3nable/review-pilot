@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from review_pilot.pr_models import PullRequestFile, PullRequestInfo, PullRequestRef
-from review_pilot.workspace import WorkspaceError, build_workspace_plan, prepare_workspace
+from review_pilot.workspace import (
+    WorkspaceError,
+    build_existing_workspace_plan,
+    build_workspace_plan,
+    prepare_workspace,
+)
 
 
 def test_build_workspace_plan_uses_head_repo_and_sha(tmp_path: Path) -> None:
@@ -36,6 +41,24 @@ def test_prepare_workspace_dry_run_does_not_create_directory(tmp_path: Path) -> 
 
     assert returned == plan
     assert not Path(plan.workspace_path).exists()
+
+
+def test_existing_workspace_plan_reuses_checked_out_repo(tmp_path: Path) -> None:
+    plan = build_existing_workspace_plan(_pr_info(), workspace_path=tmp_path)
+
+    returned = prepare_workspace(plan)
+
+    assert returned == plan
+    assert plan.workspace_path == str(tmp_path.resolve())
+    assert plan.source == "github-actions-checkout:octo-org/review-demo#42"
+    assert plan.commands == ()
+
+
+def test_existing_workspace_plan_rejects_missing_directory(tmp_path: Path) -> None:
+    plan = build_existing_workspace_plan(_pr_info(), workspace_path=tmp_path / "missing")
+
+    with pytest.raises(WorkspaceError, match="workspace does not exist"):
+        prepare_workspace(plan)
 
 
 def test_prepare_workspace_rejects_existing_workspace(tmp_path: Path) -> None:
