@@ -59,11 +59,33 @@ def build_workspace_plan(
     )
 
 
+def build_existing_workspace_plan(
+    pr_info: PullRequestInfo,
+    *,
+    workspace_path: str | Path,
+    dry_run: bool = False,
+) -> WorkspacePlan:
+    return WorkspacePlan(
+        workspace_path=str(Path(workspace_path).resolve()),
+        repo_clone_url=pr_info.head.repo_clone_url or pr_info.base.repo_clone_url,
+        base_sha=pr_info.base.sha,
+        head_sha=pr_info.head.sha,
+        source=f"github-actions-checkout:{pr_info.full_name}#{pr_info.number}",
+        dry_run=dry_run,
+        commands=(),
+    )
+
+
 def prepare_workspace(plan: WorkspacePlan) -> WorkspacePlan:
     if plan.dry_run:
         return plan
 
     workspace_path = Path(plan.workspace_path)
+    if not plan.commands:
+        if not workspace_path.exists():
+            raise WorkspaceError(f"workspace does not exist: {workspace_path}")
+        return plan
+
     if workspace_path.exists():
         raise WorkspaceError(f"workspace already exists: {workspace_path}")
     workspace_path.parent.mkdir(parents=True, exist_ok=True)
