@@ -194,6 +194,29 @@ def test_upsert_gitlab_summary_note_creates_when_marker_is_missing() -> None:
     assert "/projects/84181645/merge_requests/7/notes" in transport.requests[1].full_url
 
 
+def test_gitlab_note_client_uses_ci_api_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("CI_API_V4_URL", "http://git.cpptrain.top/api/v4")
+    transport = FakeTransport(
+        [
+            [],
+            {
+                "id": 2003,
+                "web_url": "http://git.cpptrain.top/cpp-camp/speed-logger/-/merge_requests/7#note_2003",
+            },
+        ]
+    )
+    client = GitLabNoteClient(token="token", transport=transport)
+
+    client.upsert_summary_note(
+        GitLabNoteTarget("cpp-camp/speed-logger", 7),
+        build_summary_comment(_gitlab_report()),
+        dry_run=False,
+    )
+
+    assert transport.requests[0].full_url.startswith("http://git.cpptrain.top/api/v4/")
+    assert transport.requests[1].full_url.startswith("http://git.cpptrain.top/api/v4/")
+
+
 def test_gitlab_note_target_from_report_prefers_project_id() -> None:
     target = gitlab_note_target_from_report(_gitlab_report())
 

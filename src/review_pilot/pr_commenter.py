@@ -197,12 +197,17 @@ class GitLabNoteClient:
         self,
         *,
         token: str | None = None,
-        api_base_url: str = "https://gitlab.com/api/v4",
+        api_base_url: str | None = None,
         transport: HttpTransport | None = None,
         timeout: float = 20.0,
     ) -> None:
         self.token = token if token is not None else os.environ.get("GITLAB_TOKEN")
-        self.api_base_url = api_base_url.rstrip("/")
+        self.api_base_url = (
+            api_base_url
+            or os.environ.get("GITLAB_API_BASE_URL")
+            or os.environ.get("CI_API_V4_URL")
+            or "https://gitlab.com/api/v4"
+        ).rstrip("/")
         self.transport = transport or urlopen
         self.timeout = timeout
 
