@@ -86,6 +86,29 @@ def test_fetch_merge_request_builds_pr_info_and_diff() -> None:
     assert "glpat_secret" not in json.dumps(pr_info.to_dict())
 
 
+def test_fetch_merge_request_accepts_start_sha_when_base_sha_is_null() -> None:
+    class StartShaTransport(FakeTransport):
+        def __call__(self, request, timeout: float) -> FakeResponse:
+            response = super().__call__(request, timeout)
+            if request.full_url.endswith("/projects/cpp-camp%2Fspeed-logger/merge_requests/7"):
+                payload = dict(response.payload)
+                payload.pop("diff_base_sha", None)
+                payload["diff_refs"] = {
+                    "base_sha": None,
+                    "head_sha": "2222222222222222222222222222222222222222",
+                    "start_sha": "1111111111111111111111111111111111111111",
+                }
+                return FakeResponse(payload)
+            return response
+
+    provider = GitLabProvider(token="glpat_secret", transport=StartShaTransport())
+
+    pr_info = provider.fetch_merge_request("cpp-camp/speed-logger", 7)
+
+    assert pr_info.base.sha == "1111111111111111111111111111111111111111"
+    assert pr_info.head.sha == "2222222222222222222222222222222222222222"
+
+
 def test_gitlab_permission_error_is_readable() -> None:
     def transport(request, timeout: float):
         raise HTTPError(request.full_url, 403, "forbidden", Message(), None)

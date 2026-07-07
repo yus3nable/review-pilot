@@ -100,14 +100,24 @@ class GitLabProvider:
             base=PullRequestRef(
                 label=f"{path_with_namespace}:{_required_str(mr_payload, 'target_branch')}",
                 ref=_required_str(mr_payload, "target_branch"),
-                sha=_required_ref_sha(diff_refs, "base_sha", mr_payload, "diff_base_sha"),
+                sha=_required_ref_sha(
+                    diff_refs,
+                    ("base_sha", "start_sha"),
+                    mr_payload,
+                    ("diff_base_sha",),
+                ),
                 repo_full_name=path_with_namespace,
                 repo_clone_url=http_url_to_repo,
             ),
             head=PullRequestRef(
                 label=f"{source_path}:{_required_str(mr_payload, 'source_branch')}",
                 ref=_required_str(mr_payload, "source_branch"),
-                sha=_required_ref_sha(diff_refs, "head_sha", mr_payload, "sha"),
+                sha=_required_ref_sha(
+                    diff_refs,
+                    ("head_sha",),
+                    mr_payload,
+                    ("sha", "merge_commit_sha", "squash_commit_sha"),
+                ),
                 repo_full_name=source_path,
                 repo_clone_url=source_http_url,
             ),
@@ -213,14 +223,20 @@ def _required_int(payload: Any, key: str) -> int:
 
 def _required_ref_sha(
     diff_refs: dict[str, Any],
-    diff_key: str,
+    diff_keys: tuple[str, ...],
     payload: dict[str, Any],
-    fallback_key: str,
+    fallback_keys: tuple[str, ...],
 ) -> str:
-    value = diff_refs.get(diff_key)
-    if isinstance(value, str) and value:
-        return value
-    return _required_str(payload, fallback_key)
+    for key in diff_keys:
+        value = diff_refs.get(key)
+        if isinstance(value, str) and value:
+            return value
+    for key in fallback_keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    expected = ", ".join((*diff_keys, *fallback_keys))
+    raise GitProviderError(f"gitlab response is missing ref sha field: {expected}")
 
 
 def _optional_str(payload: Any, key: str) -> str | None:
