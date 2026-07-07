@@ -19,8 +19,9 @@ from .diff_reader import DiffReader
 from .doctor import run_checks
 from .evidence_guard import guard_llm_findings
 from .finding_merger import merge_findings
-from .git_providers import GitHubProvider, GitProviderError
+from .git_providers import GitHubProvider, GitLabProvider, GitProviderError
 from .github_action import GitHubActionError, run_github_action
+from .gitlab_ci import GitLabCIError, run_gitlab_ci
 from .git_client import GitClient, GitError, NotGitRepositoryError
 from .hooks import (
     HookError,
@@ -403,6 +404,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--report-url",
         help="URL to the full report artifact shown in comments or notifications.",
     )
+    gitlab_ci_parser = subparsers.add_parser(
+        "gitlab-ci",
+        help="Run review-pilot from a GitLab CI merge request pipeline.",
+    )
+    gitlab_ci_parser.add_argument(
+        "--output-dir",
+        default="review-pilot-artifacts",
+        help="Directory for review-report.md and review-report.json artifacts.",
+    )
+    gitlab_ci_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Prepare MR input and write artifacts without posting notes.",
+    )
+    gitlab_ci_parser.add_argument(
+        "--fail-on",
+        choices=("P0", "P1", "P2", "P3"),
+        help="Return exit code 1 when the artifact report reaches this severity.",
+    )
+    gitlab_ci_parser.add_argument(
+        "--provider",
+        choices=supported_providers(),
+        help="Run the formal LLM provider against the merge request workspace.",
+    )
+    gitlab_ci_parser.add_argument(
+        "--post-summary-comment",
+        action="store_true",
+        help="Publish or preview the MR summary note.",
+    )
+    gitlab_ci_parser.add_argument(
+        "--report-url",
+        help="URL to the full report artifact shown in comments or notifications.",
+    )
     notify_parser = subparsers.add_parser(
         "notify",
         help="Send review report notifications.",
@@ -566,6 +600,43 @@ def build_github_action_parser() -> argparse.ArgumentParser:
         "--post-summary-comment",
         action="store_true",
         help="Publish or preview the PR summary comment.",
+    )
+    parser.add_argument(
+        "--report-url",
+        help="URL to the full report artifact shown in comments or notifications.",
+    )
+    return parser
+
+
+def build_gitlab_ci_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="review-pilot gitlab-ci",
+        description="Run review-pilot from a GitLab CI merge request pipeline.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="review-pilot-artifacts",
+        help="Directory for review-report.md and review-report.json artifacts.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Prepare MR input and write artifacts without posting notes.",
+    )
+    parser.add_argument(
+        "--fail-on",
+        choices=("P0", "P1", "P2", "P3"),
+        help="Return exit code 1 when the artifact report reaches this severity.",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=supported_providers(),
+        help="Run the formal LLM provider against the merge request workspace.",
+    )
+    parser.add_argument(
+        "--post-summary-comment",
+        action="store_true",
+        help="Publish or preview the MR summary note.",
     )
     parser.add_argument(
         "--report-url",
@@ -938,6 +1009,25 @@ def _run_github_action(args: argparse.Namespace, stdout: TextIO, stderr: TextIO)
         )
     except GitHubActionError as exc:
         print(f"github action error: {exc}", file=stderr)
+        return 2
+
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2), file=stdout)
+    return result.exit_code
+
+
+def _run_gitlab_ci(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
+    try:
+        result = run_gitlab_ci(
+            output_dir=args.output_dir,
+            dry_run=args.dry_run,
+            fail_on=args.fail_on,
+            provider=GitLabProvider(),
+            llm_provider=args.provider,
+            post_summary_comment=args.post_summary_comment,
+            report_url=args.report_url,
+        )
+    except GitLabCIError as exc:
+        print(f"gitlab ci error: {exc}", file=stderr)
         return 2
 
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2), file=stdout)
@@ -1448,6 +1538,14 @@ def main(argv: Sequence[str] | None = None, stdout: TextIO | None = None, stderr
         build_github_action_parser().print_help(out)
         return 0
 
+    if command_args in (
+        ["gitlab-ci"],
+        ["gitlab-ci", "--help"],
+        ["gitlab-ci", "-h"],
+    ):
+        build_gitlab_ci_parser().print_help(out)
+        return 0
+
     if command_args in (["notify"], ["notify", "--help"], ["notify", "-h"]):
         build_notify_parser().print_help(out)
         return 0
@@ -1536,6 +1634,9 @@ def main(argv: Sequence[str] | None = None, stdout: TextIO | None = None, stderr
 
     if args.command == "github-action":
         return _run_github_action(args, out, err)
+
+    if args.command == "gitlab-ci":
+        return _run_gitlab_ci(args, out, err)
 
     if args.command == "notify":
         return _run_notify(args, out, err)

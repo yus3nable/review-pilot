@@ -8,9 +8,12 @@ import pytest
 from review_pilot.pr_commenter import (
     SUMMARY_COMMENT_MARKER,
     CommentTarget,
+    GitLabNoteClient,
+    GitLabNoteTarget,
     GitHubCommentClient,
     build_summary_comment,
     comment_target_from_report,
+    gitlab_note_target_from_report,
 )
 from review_pilot.report_models import Finding, ReviewReport
 
@@ -133,6 +136,70 @@ def test_upsert_summary_comment_creates_when_marker_is_missing() -> None:
     assert transport.requests[1].get_method() == "POST"
 
 
+def test_upsert_gitlab_summary_note_updates_existing_marker_note() -> None:
+    transport = FakeTransport(
+        [
+            [
+                {
+                    "id": 2001,
+                    "body": f"{SUMMARY_COMMENT_MARKER}\nold body",
+                    "author": {"username": "review-pilot"},
+                }
+            ],
+            {
+                "id": 2001,
+                "web_url": "https://gitlab.com/cpp-camp/speed-logger/-/merge_requests/7#note_2001",
+            },
+        ]
+    )
+    client = GitLabNoteClient(token="token", transport=transport)
+
+    action = client.upsert_summary_note(
+        GitLabNoteTarget("cpp-camp/speed-logger", 7),
+        build_summary_comment(_gitlab_report()),
+        dry_run=False,
+    )
+
+    assert action.action == "update"
+    assert action.comment_id == 2001
+    assert len(transport.requests) == 2
+    assert transport.requests[0].get_method() == "GET"
+    assert transport.requests[1].get_method() == "PUT"
+    assert "cpp-camp%2Fspeed-logger" in transport.requests[0].full_url
+    assert transport.bodies[1] is not None
+    assert SUMMARY_COMMENT_MARKER in str(transport.bodies[1]["body"])
+
+
+def test_upsert_gitlab_summary_note_creates_when_marker_is_missing() -> None:
+    transport = FakeTransport(
+        [
+            [{"id": 8, "body": "human note", "author": {"username": "alice"}}],
+            {
+                "id": 2002,
+                "web_url": "https://gitlab.com/cpp-camp/speed-logger/-/merge_requests/7#note_2002",
+            },
+        ]
+    )
+    client = GitLabNoteClient(token="token", transport=transport)
+
+    action = client.upsert_summary_note(
+        GitLabNoteTarget(84181645, 7),
+        build_summary_comment(_gitlab_report()),
+        dry_run=False,
+    )
+
+    assert action.action == "create"
+    assert action.comment_id == 2002
+    assert transport.requests[1].get_method() == "POST"
+    assert "/projects/84181645/merge_requests/7/notes" in transport.requests[1].full_url
+
+
+def test_gitlab_note_target_from_report_prefers_project_id() -> None:
+    target = gitlab_note_target_from_report(_gitlab_report())
+
+    assert target == GitLabNoteTarget(project_id_or_path=84181645, merge_request_iid=7)
+
+
 def test_comment_target_from_report_rejects_missing_pr_metadata() -> None:
     with pytest.raises(Exception, match="repository"):
         comment_target_from_report(ReviewReport(findings=[]))
@@ -164,3 +231,13 @@ def _report() -> ReviewReport:
         },
         config_source="default",
     )
+
+
+def _gitlab_report() -> ReviewReport:
+    report = _report()
+    report.repo_info = {
+        "repository": "cpp-camp/speed-logger",
+        "project_id": 84181645,
+        "pull_request": 7,
+    }
+    return report
